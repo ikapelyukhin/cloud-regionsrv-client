@@ -44,6 +44,11 @@ import time
 import urllib.parse
 import uuid
 
+import urllib.request
+import re
+import subprocess
+import json
+
 import cloudregister.registerutils as utils
 
 from cloudregister import smt
@@ -90,6 +95,30 @@ def get_products():
 
     return products
 
+# ----------------------------------------------------------------------------
+
+def get_smt_instance_tags():
+  instance_id = urllib.request.urlopen("http://169.254.169.254/latest/meta-data/instance-id").read().decode('utf-8')
+  region = urllib.request.urlopen("http://169.254.169.254/latest/meta-data/placement/availability-zone").read().decode('utf-8')
+
+  region = re.sub('[a-z]$', '', region)
+
+  cmd = ['aws', 'ec2', 'describe-tags', '--filters', 'Name=resource-id,Values=%s' % instance_id, '--region', region]
+
+  cmd_result = subprocess.run(cmd, stdout=subprocess.PIPE)
+  data = json.loads(cmd_result.stdout)
+
+  hash = {}
+
+  for item in data['Tags']:
+    if (item['Key'] == 'SMT-IP' or item['Key'] == 'SMT-FP'):
+      hash[item['Key']] = item['Value']
+
+  if (not hash.get('SMT-IP')):
+    return
+
+  xml = '<regionSMTdata><smtInfo fingerprint="%s" SMTserverIP="%s" SMTserverName="smt-ec2.susecloud.net"/></regionSMTdata>' % (hash['SMT-FP'], hash['SMT-IP'])
+  return xml
 
 # ----------------------------------------------------------------------------
 # Support custom config file with -f command line option
@@ -178,10 +207,14 @@ if user_smt_ip:
     smt_xml += '/></regionSMTdata>'
     region_smt_data = etree.fromstring(smt_xml)
 else:
-    # Check if we are in the same region
-    # This implies that at least one of the cached servers is also in the
-    # data received in the SMT data server
-    region_smt_data = utils.fetch_smt_data(cfg, proxies)
+    smt_xml = get_smt_instance_tags()
+    if smt_xml:
+        region_smt_data = etree.fromstring(smt_xml)
+    else:
+        # Check if we are in the same region
+        # This implies that at least one of the cached servers is also in the
+        # data received in the SMT data server
+        region_smt_data = utils.fetch_smt_data(cfg, proxies)
 
 registration_smt = utils.get_current_smt()
 
